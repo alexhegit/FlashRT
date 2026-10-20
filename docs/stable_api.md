@@ -77,7 +77,15 @@ Returns a `VLAModel` wrapping the appropriate frontend for the detected
   keep their output conventions.
 - `decode_cuda_graph`, `decode_graph_steps`, `max_decode_steps` apply to
   Pi0-FAST.
-- `embodiment_tag` and `action_horizon` apply to GROOT.
+- `embodiment_tag` and `action_horizon` apply to GROOT. XR-1 also uses
+  `embodiment_tag` for the robot normalization entry; its action horizon is
+  checkpoint-defined.
+- `config="xr1"` supports torch on `hardware="amd_rdna35"` (gfx1151).
+  Pass three views and robot state. `attention="sdpa"` (default) or `"eager"`
+  selects VLM attention; `fuse=True` enables the native HIP adapters and
+  `fuse=False` is the reference default. `num_steps` defaults to five.
+  `action_dim` defaults to 7 for RoboCasa and 60 for the published 5B policy.
+  See [XR-1 deployment](xr1_gfx1151.md) for checkpoints and input schemas.
 - `use_fp4`, `fp4_layers`, `use_awq`, `awq_alpha`, and
   `use_p1_split_gu` apply to the Pi0.5 torch and JAX NVFP4 encoder path on
   Thor. The JAX path loads Orbax checkpoints; the torch path loads
