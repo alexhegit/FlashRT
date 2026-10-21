@@ -1,6 +1,7 @@
 # XR-1 gfx1151 validation report
 
-Validation recorded on 2026-10-21.
+Initial validation recorded on 2026-10-21. The full-model HIP Graph follow-up
+appears below; the initial measurements are retained as a historical snapshot.
 
 Implemented and GPU validated:
 
@@ -71,7 +72,62 @@ Practical limits:
   Deployment requires the target embodiment's statistics and post-training.
 - No robot/simulation task-success benchmark was run and no robot was controlled.
 - Native BF16 is experimental and opt-in (`fuse=True`); reference mode is the
-  default. Attention remains ROCm SDPA. The Torch adapters allocate intermediate
-  tensors during inference; persistent scratch buffers and full-model graph
-  capture are not implemented.
+  default. Attention remains ROCm SDPA. These initial measurements used
+  uncaptured inference; full-model HIP Graph was added in the follow-up below.
 - Hardware qualification covers gfx1151 only.
+
+## Full-model HIP Graph follow-up — 2026-10-21
+
+Implemented on branch `feat/xr1-gfx1151-hip-graph`, based on `75421a27`.
+The opt-in `load_model(..., use_graph=True)` captures the original full vision,
+VLM and DiT forward for both checkpoints, with either reference or native
+DiT operations. The default stays uncaptured. See the
+[deployment guide](xr1_gfx1151.md#optional-full-model-hip-graph) and
+[stable API](stable_api.md) for the contract and reproducible commands.
+
+One frontend owns one graph profile, persistent input/noise buffers, static
+metadata and the graph memory pool. Token/layout/shape/step/prefix-length
+changes release and rebuild that profile; image, state, prefix and seed changes
+refresh inputs. Image features and K/V are computed on every observation.
+Instance-local capture helpers restore model methods on success and failure;
+they do not modify the checkpoint or process-wide globals. Every capture must
+match the uncaptured raw output exactly or raise an error.
+
+Validation covers 78 paired raw/decoded comparisons across reference/native
+and 5B/RoboCasa, including recovery after injected capture failures. All had
+maximum absolute difference zero. Cases include changed images, states and
+seeds, same-length and longer prompts, image resolution, denoise steps and 5B
+prefix values/lengths. Both 5B modes also passed all twelve real observations.
+Caller CPU/GPU RNG state was preserved. Native `attention="eager"` graph smoke
+checks also passed for both checkpoints; performance below uses SDPA.
+
+Same-process, alternating-order public `predict` measurements; BF16 native HIP
+DiT, batch one, five steps, eight CPU threads, PyTorch `2.10.0+rocm7.2.0.gitb6ee5fde`,
+HIP `7.2.26015`, Transformers `4.57.1`, experimental AOTriton enabled:
+
+| Case | Uncaptured P50 / P95 | Graph P50 / P95 | P50 reduction |
+|---|---:|---:|---:|
+| RoboCasa, synthetic 3×256×256 | 375.53 / 383.46 ms | 362.69 / 363.91 ms | 3.42% |
+| 5B, synthetic 3×256×256 | 393.67 / 395.51 ms | 367.38 / 371.73 ms | 6.68% |
+| 5B, twelve real demo observations | 653.05 / 656.65 ms | 635.15 / 638.82 ms | 2.74% |
+
+All modes warm up three calls; synthetic runs measure 50 calls per mode, real
+runs measure three cycles of twelve observations (36 per mode). Timers include
+preprocessing, upload, full computation, action decoding and download. These
+are fresh paired baselines, not comparisons against the earlier ten-call data.
+
+Graph first-call latency on the warmed model was 1.85 / 1.92 / 3.09 seconds for
+the three rows. Warm resident PyTorch allocations increased by about
+80 / 80 / 85 MiB. Setup overhead makes stable profiles preferable. Numerical
+validation and offline observation replay do not establish simulation success.
+
+Evidence is local under `results/xr1_graph/`: paired JSON/NPZ files,
+`run_benchmarks.py`, `benchmark_commands.json`, graph/regression logs and the
+experiment `REPORT.md`. Earlier evidence remains under `results/xr1/` and
+`results/gfx1151_models/`.
+
+The combined graph/affected regression runs contain 213 unique passing tests.
+The broader API checks also have 23 failures caused by missing NVIDIA
+extensions; the unmodified `75421a27` baseline reproduces the exact same 23
+failures. This is not a full-repository clean test result. `pip check`, Python
+compilation and `git diff --check` passed.

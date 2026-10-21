@@ -11,12 +11,13 @@ class XR1TorchFrontendAmdRdna35:
 
     Checkpoint code is loaded with Hugging Face trust_remote_code. Use a local
     snapshot downloaded at a reviewed revision. ``fuse=True`` adds FlashRT
-    HIP DiT GEMM/RMSNorm; False keeps upstream ATen ops.
+    HIP DiT GEMM/RMSNorm; False keeps upstream ATen ops. ``use_graph=True``
+    captures the full GPU forward on first prediction for each input profile.
     """
 
     def __init__(self, checkpoint_dir, num_views=3, num_steps=5,
                  hardware=None, use_fp8=False, embodiment_tag=None,
-                 action_dim=None, attention="sdpa", fuse=False):
+                 action_dim=None, attention="sdpa", fuse=False, use_graph=False):
         if hardware not in (None, "amd_rdna35"):
             raise ValueError("XR-1 frontend requires amd_rdna35")
         if not torch.version.hip or not torch.cuda.is_available():
@@ -33,6 +34,8 @@ class XR1TorchFrontendAmdRdna35:
                 raise ValueError(f"{name} must be a positive integer")
         if not isinstance(fuse, bool):
             raise ValueError("fuse must be a boolean")
+        if not isinstance(use_graph, bool):
+            raise ValueError("use_graph must be a boolean")
         if (action_dim is not None and (isinstance(action_dim, bool)
                 or not isinstance(action_dim, int) or action_dim < 1)):
             raise ValueError("action_dim must be a positive integer")
@@ -70,6 +73,8 @@ class XR1TorchFrontendAmdRdna35:
             self.model.requires_grad_(False)
         from flash_rt.amd.models.xr1.pipeline_rdna35 import XR1PipelineRdna35
         self.pipeline = XR1PipelineRdna35(self.model, native=fuse)
+        self.use_graph = use_graph
+        self.graph_runner = None
         self.num_views, self.num_steps = num_views, num_steps
         self.embodiment_tag, self.action_dim = embodiment_tag, action_dim
         self.prompt = None
@@ -139,12 +144,20 @@ class XR1TorchFrontendAmdRdna35:
             **({'padding': True, 'images_kwargs': {'do_resize': False}}
                if self.foundation else {}),
             **({'action_prefix': obs['action_prefix']} if 'action_prefix' in obs else {}))
-        data = {k: v.to(device="cuda", dtype=torch.bfloat16) if isinstance(v, torch.Tensor) and v.is_floating_point()
-                else v.to("cuda") if isinstance(v, torch.Tensor) else v
-                for k, v in inputs.items()}
-        outputs = self.pipeline.forward(data, seed=int(obs.get("seed", 42)),
-                                        num_steps=self.num_steps,
-                                        embodiment=self.embodiment_tag)
-        actions = self.processor.decode_action(outputs.actions,
+        if self.use_graph:
+            if self.graph_runner is None:
+                from .xr1_graph import XR1FullGraph
+                self.graph_runner = XR1FullGraph(self.pipeline)
+            raw_actions = self.graph_runner.run(
+                inputs, seed=int(obs.get("seed", 42)), num_steps=self.num_steps,
+                embodiment=self.embodiment_tag)
+        else:
+            data = {k: v.to(device="cuda", dtype=torch.bfloat16) if isinstance(v, torch.Tensor) and v.is_floating_point()
+                    else v.to("cuda") if isinstance(v, torch.Tensor) else v
+                    for k, v in inputs.items()}
+            raw_actions = self.pipeline.forward(data, seed=int(obs.get("seed", 42)),
+                                                num_steps=self.num_steps,
+                                                embodiment=self.embodiment_tag).actions
+        actions = self.processor.decode_action(raw_actions,
                                                robot_type=self.embodiment_tag)
         return {"actions": actions[0, :, :self.action_dim].float().cpu().numpy()}

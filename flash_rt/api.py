@@ -363,7 +363,8 @@ def load_model(checkpoint, framework="torch", num_views=2, autotune=3,
                decoder_gate_up_variant=10,
                attention=None,
                fuse=None,
-               compile_mode=None):
+               compile_mode=None,
+               use_graph=False):
     """Load a FlashRT model.
 
     Args:
@@ -372,6 +373,8 @@ def load_model(checkpoint, framework="torch", num_views=2, autotune=3,
             - jax: Orbax checkpoint directory
         framework: "torch" or "jax"
         num_views: number of camera views (default 2)
+        use_graph: opt in to full-model HIP Graph for XR-1 torch/gfx1151.
+            Default False. Captures lazily and rebuilds on metadata changes.
         autotune: CUDA Graph autotune intensity.
             0 or False = off (fastest startup, ~2ms slower inference risk)
             3 = default (Torch finds fast graph on trial 0-1)
@@ -580,6 +583,11 @@ def load_model(checkpoint, framework="torch", num_views=2, autotune=3,
             "    from flash_rt.frontends.torch.alpamayo15_flashdrive_thor import "
             "Alpamayo15FlashDriveTorchFrontendThor\n"
             "See docs/alpamayo15.md.")
+
+    if not isinstance(use_graph, bool):
+        raise ValueError("use_graph must be a boolean")
+    if use_graph and (config != "xr1" or framework != "torch"):
+        raise ValueError("use_graph=True supports XR-1 torch/gfx1151 only")
 
     if framework == "jetson_pi" and (use_fp4_decoder or use_fa4):
         raise ValueError(
@@ -1204,6 +1212,8 @@ def load_model(checkpoint, framework="torch", num_views=2, autotune=3,
                 kwargs[name] = value
     elif config == "xr1":
         kwargs["use_fp8"] = False
+        if use_graph:
+            kwargs["use_graph"] = True
         if num_steps is not None:
             kwargs["num_steps"] = num_steps
         if embodiment_tag is not None:
