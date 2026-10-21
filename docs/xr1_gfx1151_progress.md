@@ -1,6 +1,6 @@
-# XR-1 gfx1151 implementation progress
+# XR-1 gfx1151 validation report
 
-Updated 2026-10-21 00:17, Asia/Shanghai. Branch: `feat/xr1-gfx1151`.
+Validation recorded on 2026-10-21.
 
 Implemented and GPU validated:
 
@@ -70,14 +70,8 @@ Practical limits:
 - The 5B smoke checkpoint uses upstream `load_washer` demonstration statistics.
   Deployment requires the target embodiment's statistics and post-training.
 - No robot/simulation task-success benchmark was run and no robot was controlled.
-- Native BF16 is opt-in (`fuse=True`); reference mode is the default. Attention
-  remains ROCm SDPA. Full-model graph capture is not implemented.
+- Native BF16 is experimental and opt-in (`fuse=True`); reference mode is the
+  default. Attention remains ROCm SDPA. The Torch adapters allocate intermediate
+  tensors during inference; persistent scratch buffers and full-model graph
+  capture are not implemented.
 - Hardware qualification covers gfx1151 only.
-
-The one-shot user timer `flashrt-xr1-morning-report-v2.timer` is active for
-2026-10-21 08:00:00 Asia/Shanghai, accuracy 1 second. It invokes `codex queue`
-from this project directory for the current conversation. Queue insertion was
-verified; autonomous delivery at 08:00 has not yet occurred and depends on
-this machine and Codex session processing remaining available. At that time,
-report actual results without starting new modifications or downloads because
-the user's temporary broad authorization expires then.
