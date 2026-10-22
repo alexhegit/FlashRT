@@ -1,6 +1,7 @@
-"""BF16 Pi0.5 torch frontend for AMD RDNA 3.5.
+"""BF16 Pi0.5 torch frontend for AMD RDNA wave32 targets.
 
-The backend loads the RDNA extension once, then passes it directly to the
+Supports gfx1151 (``amd_rdna35``) and gfx1201 (``amd_rdna4`` / R9700). The
+backend loads the RDNA extension once, then passes it directly to the
 pipeline, attention provider, and instance-local hipBLASLt BF16 runner. ATen
 and SDPA remain available as correctness fallbacks.
 """
@@ -9,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import pathlib
 import time
 from typing import Optional, Union
@@ -34,6 +36,12 @@ from flash_rt.amd.models.pi05_rdna35.pipeline import (
 )
 from flash_rt.core.utils.actions import unnormalize_actions
 from flash_rt.core.utils.norm_stats import load_norm_stats, pi05_candidates
+
+# Public hardware key → exact ISA base target required at load time.
+_RDNA_HARDWARE_ARCH = {
+    "amd_rdna35": "gfx1151",
+    "amd_rdna4": "gfx1201",
+}
 
 
 def _build_time_embeddings(num_steps: int) -> torch.Tensor:
@@ -64,7 +72,7 @@ def _build_time_embeddings(num_steps: int) -> torch.Tensor:
 
 
 class Pi05TorchFrontendAmdRdna35:
-    """Correctness-first Pi0.5 frontend for AMD RDNA 3.5."""
+    """Correctness-first Pi0.5 frontend for AMD RDNA wave32 (3.5 / 4)."""
 
     _VIEW_KEYS = ("image", "wrist_image", "wrist_image_right")
 
@@ -80,20 +88,31 @@ class Pi05TorchFrontendAmdRdna35:
         hardware: Optional[str] = None,
         action_dim: Optional[int] = None,
     ):
-        if hardware not in (None, "amd_rdna35"):
+        if hardware is not None and hardware not in _RDNA_HARDWARE_ARCH:
             raise ValueError(
-                "Pi05TorchFrontendAmdRdna35 requires hardware='amd_rdna35', "
-                f"got {hardware!r}")
+                "Pi05TorchFrontendAmdRdna35 requires hardware in "
+                f"{sorted(_RDNA_HARDWARE_ARCH)}, got {hardware!r}")
         if use_fp8:
-            raise ValueError("amd_rdna35 currently supports BF16 only")
+            raise ValueError(
+                "AMD RDNA Pi0.5 backends currently support BF16 only")
         if not torch.cuda.is_available() or getattr(torch.version, "hip", None) is None:
-            raise RuntimeError("amd_rdna35 requires a ROCm build of PyTorch")
+            raise RuntimeError(
+                "AMD RDNA Pi0.5 requires a ROCm build of PyTorch")
         device_arch = str(
             getattr(torch.cuda.get_device_properties(0), "gcnArchName", "unknown"))
-        if device_arch.split(":", 1)[0] != "gfx1151":
-            raise RuntimeError(
-                "Pi05TorchFrontendAmdRdna35 is gfx1151-only: running device "
-                f"architecture is {device_arch!r}")
+        device_base = device_arch.split(":", 1)[0]
+        if hardware is None:
+            if device_base not in _RDNA_HARDWARE_ARCH.values():
+                raise RuntimeError(
+                    "Pi05TorchFrontendAmdRdna35 requires gfx1151 or gfx1201; "
+                    f"running device architecture is {device_arch!r}")
+            expected_arch = device_base
+        else:
+            expected_arch = _RDNA_HARDWARE_ARCH[hardware]
+            if device_base != expected_arch:
+                raise RuntimeError(
+                    f"hardware={hardware!r} requires {expected_arch}; "
+                    f"running device architecture is {device_arch!r}")
 
         from flash_rt.amd import flash_rt_amd_kernels as fvk
 
@@ -106,11 +125,16 @@ class Pi05TorchFrontendAmdRdna35:
         ):
             raise RuntimeError(
                 "flash_rt_amd_kernels was not built with the RDNA source set")
-        if build_arch != "gfx1151" or extension_device_arch != "gfx1151":
+        if build_arch != expected_arch or extension_device_arch != expected_arch:
             raise RuntimeError(
-                "RDNA 3.5 HIP kernels require a gfx1151 build and device: "
-                f"build={build_arch!r} device={extension_device_arch!r}")
-
+                "RDNA HIP kernels require a matching build and device: "
+                f"expected={expected_arch!r} build={build_arch!r} "
+                f"device={extension_device_arch!r}")
+        # gfx1201 builds stub gfx11 WMMA entry points; default the Python
+        # backends onto hipBLASLt / SDPA unless the caller already opted in.
+        if expected_arch == "gfx1201":
+            os.environ.setdefault("FLASHRT_RDNA35_HIP_SMALLM", "0")
+            os.environ.setdefault("FLASHRT_RDNA35_HIP_ENCODER_ATTN", "0")
         checkpoint_dir = pathlib.Path(checkpoint_dir)
         checkpoint = checkpoint_dir / "model.safetensors"
         if not checkpoint.is_file():

@@ -71,11 +71,31 @@ def test_detect_arch_maps_gfx1151(monkeypatch, arch):
     assert detect_arch() == "amd_rdna35"
 
 
+@pytest.mark.parametrize("arch", ["gfx1201", "gfx1201:sramecc-:xnack-"])
+def test_detect_arch_maps_gfx1201(monkeypatch, arch):
+    from flash_rt.hardware import detect_arch
+
+    _patch_rocm(monkeypatch, arch)
+    assert detect_arch() == "amd_rdna4"
+
+
 def test_rdna35_does_not_alias_cdna4(monkeypatch):
     from flash_rt.hardware import detect_arch
 
     _patch_rocm(monkeypatch, "gfx1151")
     assert detect_arch() != "amd_cdna4"
+
+
+def test_rdna4_pipeline_registration_is_lazy():
+    from flash_rt.hardware import _PIPELINE_MAP, resolve_pipeline_class
+
+    key = ("pi05", "torch", "amd_rdna4")
+    assert _PIPELINE_MAP[key] == (
+        "flash_rt.amd.frontends.torch.pi05_rdna35",
+        "Pi05TorchFrontendAmdRdna35",
+    )
+    cls = resolve_pipeline_class(*key)
+    assert cls.__name__ == "Pi05TorchFrontendAmdRdna35"
 
 
 def test_rdna35_frontend_import_does_not_require_native_extension(monkeypatch):

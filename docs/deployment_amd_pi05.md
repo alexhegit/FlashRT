@@ -290,16 +290,50 @@ model.set_prompt("pick up the object", state=state_vector)
 actions = model.predict(images=[base_image, wrist_image])
 ```
 
-`hardware="auto"` maps only the exact gfx1151 ISA to this backend. The
+`hardware="auto"` maps the exact gfx1151 ISA to `amd_rdna35`. The
 frontend also verifies that the extension was built from the RDNA source set,
 uses wave32, and targets gfx1151 before loading the checkpoint.
 
+## Pi0.5 on AMD RDNA 4 (gfx1201 / R9700)
+
+RDNA 4 reuses the same wave32 BF16 Pi0.5 frontend and HIP source set as
+RDNA 3.5. The public hardware key is `amd_rdna4`. Build and load with the
+matching ISA:
+
+```bash
+PYTHON=.venv/bin/python bash scripts/amd/build_amd.sh gfx1201
+```
+
+```python
+model = flash_rt.load_model(
+    "<checkpoint-dir>",
+    config="pi05",
+    framework="torch",
+    hardware="amd_rdna4",  # optional on a gfx1201 machine
+    action_dim=7,
+    num_views=2,
+    cache_frames=1,
+    use_fp8=False,
+)
+```
+
+`hardware="auto"` maps only the exact gfx1201 ISA to this backend. The
+frontend requires a gfx1201-built RDNA extension and a visible gfx1201
+device before loading the checkpoint. The first gfx1201 bring-up stubs the
+gfx11 WMMA small-M GEMM and encoder-attention entry points and defaults
+`FLASHRT_RDNA35_HIP_SMALLM=0` / `FLASHRT_RDNA35_HIP_ENCODER_ATTN=0` so
+hipBLASLt and SDPA cover those sites until a gfx12 WMMA fragment-layout
+port lands. End-to-end latency numbers on R9700 should be recorded against
+the same protocol used for gfx1151 (`cache_frames=1` / `2`, BF16, real
+frames, warmup then median).
+
 ## Precision tier
 
-The RDNA 3.5 backend supports BF16 weights and activations only. It does not
-route through the CDNA4 FP8 kernels, packed MFMA layouts, aiter provider, or
-wave64 helpers. `load_model()` converts its historical `use_fp8=True` default
-to BF16 with a warning; direct frontend construction rejects `use_fp8=True`.
+The RDNA 3.5 / RDNA 4 backends support BF16 weights and activations only. They
+do not route through the CDNA4 FP8 kernels, packed MFMA layouts, aiter
+provider, or wave64 helpers. `load_model()` converts its historical
+`use_fp8=True` default to BF16 with a warning; direct frontend construction
+rejects `use_fp8=True`.
 
 ## Observation contract
 
