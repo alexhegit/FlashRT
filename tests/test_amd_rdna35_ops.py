@@ -102,20 +102,23 @@ class _Rdna35TestKernels:
             x.shape[1], self._stream(x))
 
 
-def _require_gfx1151():
+_WAVE32_ARCHS = frozenset({"gfx1151", "gfx1201"})
+
+
+def _require_wave32_device():
     torch = pytest.importorskip("torch")
     if getattr(torch.version, "hip", None) is None:
         pytest.skip("requires ROCm PyTorch")
     if not torch.cuda.is_available():
         pytest.skip("requires a visible ROCm device")
     arch = getattr(torch.cuda.get_device_properties(0), "gcnArchName", "")
-    if arch.split(":", 1)[0] != "gfx1151":
-        pytest.skip("requires gfx1151")
+    if arch.split(":", 1)[0] not in _WAVE32_ARCHS:
+        pytest.skip("requires gfx1151 or gfx1201")
     return torch
 
 
 def _require_rdna35_hip():
-    torch = _require_gfx1151()
+    torch = _require_wave32_device()
     try:
         from flash_rt.amd import flash_rt_amd_kernels as fvk
 
@@ -125,6 +128,18 @@ def _require_rdna35_hip():
         kernels = _Rdna35TestKernels(fvk, torch)
     except (ImportError, RuntimeError) as exc:
         pytest.skip(f"RDNA 3.5 HIP extension is not available: {exc}")
+    return torch, kernels
+
+
+def _require_gfx11_wmma():
+    """gfx11 WMMA small-M and encoder attention are stubbed on gfx1201."""
+    torch, kernels = _require_rdna35_hip()
+    arch = getattr(
+        torch.cuda.get_device_properties(0), "gcnArchName", "")
+    if arch.split(":", 1)[0] == "gfx1201":
+        pytest.skip(
+            "gfx1201 stubs gfx11 WMMA small-M and encoder attention; "
+            "hipBLASLt and SDPA cover those sites")
     return torch, kernels
 
 
@@ -488,7 +503,7 @@ def test_hip_decoder_gqa_matches_sdpa(
     ],
 )
 def test_hip_encoder_gqa_matches_sdpa(rows, valid_kv_rows, query_heads):
-    torch, kernels = _require_rdna35_hip()
+    torch, kernels = _require_gfx11_wmma()
     import torch.nn.functional as F
 
     generator = torch.Generator(device="cuda").manual_seed(
@@ -516,7 +531,7 @@ def test_hip_encoder_gqa_matches_sdpa(rows, valid_kv_rows, query_heads):
 
 
 def test_encoder_backend_routes_native_compact_and_padded(monkeypatch):
-    torch, kernels = _require_rdna35_hip()
+    torch, kernels = _require_gfx11_wmma()
     import torch.nn.functional as F
     from flash_rt.amd.hardware.rdna35 import Rdna35AttentionBackend
 
@@ -653,7 +668,7 @@ def test_hip_decoder_gqa_splitkey_variants(keys_per_iteration):
     ],
 )
 def test_hip_smallm_wmma_matches_torch(rows, inner, columns, with_bias):
-    torch, kernels = _require_rdna35_hip()
+    torch, kernels = _require_gfx11_wmma()
 
     generator = torch.Generator(device="cuda").manual_seed(
         rows + inner + columns)
@@ -680,7 +695,7 @@ def test_hip_smallm_wmma_matches_torch(rows, inner, columns, with_bias):
 
 
 def test_hip_attention_and_smallm_support_graph_replay():
-    torch, kernels = _require_rdna35_hip()
+    torch, kernels = _require_gfx11_wmma()
     import torch.nn.functional as F
 
     generator = torch.Generator(device="cuda").manual_seed(211)
@@ -738,7 +753,7 @@ def test_hip_attention_and_smallm_support_graph_replay():
 
 
 def test_hip_encoder_attention_supports_graph_replay():
-    torch, kernels = _require_rdna35_hip()
+    torch, kernels = _require_gfx11_wmma()
     import torch.nn.functional as F
 
     generator = torch.Generator(device="cuda").manual_seed(217)
@@ -806,7 +821,7 @@ def test_hipblaslt_runner_supports_graph_replay():
 
 @pytest.mark.parametrize("rows", [15, 48])
 def test_gemm_backend_routes_prepared_action_projection(monkeypatch, rows):
-    torch, kernels = _require_rdna35_hip()
+    torch, kernels = _require_gfx11_wmma()
     from flash_rt.amd.hardware.rdna35 import Rdna35GemmBackend
 
     monkeypatch.setenv("FLASHRT_RDNA35_HIP_SMALLM", "1")
@@ -879,7 +894,7 @@ def test_native_attention_rejects_invalid_output_shape():
 
 @pytest.mark.parametrize("rows", [15, 48])
 def test_gemm_backend_fuses_prepared_action_residual(monkeypatch, rows):
-    torch, kernels = _require_rdna35_hip()
+    torch, kernels = _require_gfx11_wmma()
     from flash_rt.amd.hardware.rdna35 import Rdna35GemmBackend
 
     monkeypatch.setenv("FLASHRT_RDNA35_HIP_SMALLM", "1")

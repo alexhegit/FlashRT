@@ -162,23 +162,25 @@ def test_rdna35_reference_fallback_does_not_import_triton(monkeypatch):
     assert not attention.hip_encoder_gqa
 
 
-def test_load_model_rdna35_defaults_to_bf16_before_checkpoint(caplog):
+def test_load_model_rdna_wave32_defaults_to_bf16_before_checkpoint(caplog):
     import torch
     import flash_rt
 
     if not torch.cuda.is_available() or getattr(torch.version, "hip", None) is None:
-        pytest.skip("requires a visible gfx1151 ROCm device")
-    props = torch.cuda.get_device_properties(0)
-    if getattr(props, "gcnArchName", "").split(":", 1)[0] != "gfx1151":
-        pytest.skip("requires a visible gfx1151 ROCm device")
+        pytest.skip("requires a visible gfx1151 or gfx1201 ROCm device")
+    arch = getattr(
+        torch.cuda.get_device_properties(0), "gcnArchName", "").split(":", 1)[0]
+    hardware = {"gfx1151": "amd_rdna35", "gfx1201": "amd_rdna4"}.get(arch)
+    if hardware is None:
+        pytest.skip("requires a visible gfx1151 or gfx1201 ROCm device")
 
     with caplog.at_level(logging.WARNING, logger="flash_rt.api"):
         with pytest.raises(FileNotFoundError, match="safetensors"):
             flash_rt.load_model(
-                "/nonexistent/flashrt-rdna35-checkpoint",
+                "/nonexistent/flashrt-rdna-checkpoint",
                 framework="torch",
                 config="pi05",
-                hardware="amd_rdna35",
+                hardware=hardware,
             )
     assert any("supports BF16 only" in record.getMessage()
                for record in caplog.records)

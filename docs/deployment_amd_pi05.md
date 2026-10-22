@@ -323,9 +323,16 @@ device before loading the checkpoint. The first gfx1201 bring-up stubs the
 gfx11 WMMA small-M GEMM and encoder-attention entry points and defaults
 `FLASHRT_RDNA35_HIP_SMALLM=0` / `FLASHRT_RDNA35_HIP_ENCODER_ATTN=0` so
 hipBLASLt and SDPA cover those sites until a gfx12 WMMA fragment-layout
-port lands. End-to-end latency numbers on R9700 should be recorded against
-the same protocol used for gfx1151 (`cache_frames=1` / `2`, BF16, real
-frames, warmup then median).
+port lands. The RDNA operator and model suites accept a visible gfx1201
+device. Tests that launch the gfx11 WMMA small-M or encoder-attention
+kernels skip there with that reason. `test_optimized_path_matches_aten_fallback`
+and `test_real_libero_frames_are_deterministic_and_match_aten_fallback`
+compare the loaded path with the PyTorch fallback on fixed noise.
+The LIBERO test reads the eight real observations in
+`examples/thor/assets/pi05_libero.npz`. End-to-end latency on R9700 uses
+the same protocol as gfx1151 (`cache_frames=1` / `2`, BF16, warmup then
+median). Bring-up timing used synthetic 224² views: `cache_frames=1`
+median 60.0 ms, `cache_frames=2` mixed median 44.0 ms.
 
 ## Precision tier
 
@@ -429,10 +436,13 @@ FLASH_RT_PI05_RDNA35_CKPT="<checkpoint-dir>" \
 .venv/bin/python -m pytest tests/test_amd*.py -q
 ```
 
-Operator tests compare every native family with a PyTorch reference. The
-checkpoint-gated tests cover finite outputs, fixed-noise determinism, HIP
-Graph parity, and the optimized-versus-library fallback. Profile any extra
-local benchmark from an ignored build directory; benchmark harnesses are not
+Operator tests compare every native family with a PyTorch reference. On
+gfx1201 the gfx11 WMMA small-M and encoder-attention cases skip, and the
+remaining families still run. The checkpoint-gated tests cover finite
+outputs, fixed-noise determinism, HIP Graph parity, the
+optimized-versus-library fallback, and the eight real LIBERO observations
+shipped in `examples/thor/assets/pi05_libero.npz`. Profile any extra local
+benchmark from an ignored build directory; benchmark harnesses are not
 part of the source distribution.
 
 
