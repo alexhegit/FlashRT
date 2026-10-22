@@ -60,6 +60,23 @@ def test_frontend_hardware_matches_visible_isa(model):
     assert model.pipeline.hardware == _ARCH_TO_HARDWARE[_visible_rdna_arch()]
 
 
+def test_rdna4_routes_decoder_projections_to_smallm(model):
+    if _visible_rdna_arch() != "gfx1201":
+        pytest.skip("decoder small-M routing is gfx1201-only")
+    frontend = model.pipeline
+    gemm = frontend.pipeline.gemm
+    for name in (
+        "decoder_attn_qkv_w",
+        "decoder_attn_o_w",
+        "decoder_ffn_gate_up_w",
+        "decoder_ffn_down_w",
+    ):
+        stacked = frontend.weights[name]
+        for index in range(stacked.shape[0]):
+            assert gemm._prepared_weight_nt(stacked[index]) is not None, (
+                name, index)
+
+
 def test_actions_are_finite_and_match_checkpoint_profile(model):
     frontend = model.pipeline
     noise = np.random.default_rng(19).standard_normal(

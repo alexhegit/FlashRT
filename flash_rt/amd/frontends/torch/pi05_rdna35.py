@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import pathlib
 import time
 from typing import Optional, Union
@@ -42,6 +41,14 @@ _RDNA_HARDWARE_ARCH = {
     "amd_rdna35": "gfx1151",
     "amd_rdna4": "gfx1201",
 }
+
+# Per-layer decoder projections routed to small-M WMMA on gfx1201.
+_RDNA4_SMALLM_DECODER_WEIGHTS = (
+    "decoder_attn_qkv_w",
+    "decoder_attn_o_w",
+    "decoder_ffn_gate_up_w",
+    "decoder_ffn_down_w",
+)
 
 
 def _public_rdna_hardware(expected_arch: str) -> str:
@@ -139,11 +146,6 @@ class Pi05TorchFrontendAmdRdna35:
                 "RDNA HIP kernels require a matching build and device: "
                 f"expected={expected_arch!r} build={build_arch!r} "
                 f"device={extension_device_arch!r}")
-        # gfx1201 builds stub gfx11 WMMA entry points; default the Python
-        # backends onto hipBLASLt / SDPA unless the caller already opted in.
-        if expected_arch == "gfx1201":
-            os.environ.setdefault("FLASHRT_RDNA35_HIP_SMALLM", "0")
-            os.environ.setdefault("FLASHRT_RDNA35_HIP_ENCODER_ATTN", "0")
         checkpoint_dir = pathlib.Path(checkpoint_dir)
         checkpoint = checkpoint_dir / "model.safetensors"
         if not checkpoint.is_file():
@@ -233,6 +235,13 @@ class Pi05TorchFrontendAmdRdna35:
         gemm = Rdna35GemmBackend(fvk, self.dtype)
         gemm.prepare_smallm_weight(
             self.weights["decoder_action_out_proj_w"])
+        if expected_arch == "gfx1201" and self.chunk_size <= 16:
+            # On R9700 the streamed small-M kernel beats hipBLASLt on these
+            # weight-bandwidth-bound projections. The transposed copies add
+            # about 0.6 GB.
+            for name in _RDNA4_SMALLM_DECODER_WEIGHTS:
+                for layer_weight in self.weights[name]:
+                    gemm.prepare_smallm_weight(layer_weight)
         self.pipeline = Pi05PipelineRdna35(
             self.weights,
             fvk,

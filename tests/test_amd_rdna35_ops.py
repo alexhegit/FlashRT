@@ -131,18 +131,6 @@ def _require_rdna35_hip():
     return torch, kernels
 
 
-def _require_gfx11_wmma():
-    """gfx11 WMMA small-M and encoder attention are stubbed on gfx1201."""
-    torch, kernels = _require_rdna35_hip()
-    arch = getattr(
-        torch.cuda.get_device_properties(0), "gcnArchName", "")
-    if arch.split(":", 1)[0] == "gfx1201":
-        pytest.skip(
-            "gfx1201 stubs gfx11 WMMA small-M and encoder attention; "
-            "hipBLASLt and SDPA cover those sites")
-    return torch, kernels
-
-
 def test_bf16_gemm_matches_torch_reference():
     torch, kernels = _require_rdna35_hip()
     from flash_rt.amd.hardware.rdna35 import Rdna35GemmBackend
@@ -503,7 +491,7 @@ def test_hip_decoder_gqa_matches_sdpa(
     ],
 )
 def test_hip_encoder_gqa_matches_sdpa(rows, valid_kv_rows, query_heads):
-    torch, kernels = _require_gfx11_wmma()
+    torch, kernels = _require_rdna35_hip()
     import torch.nn.functional as F
 
     generator = torch.Generator(device="cuda").manual_seed(
@@ -531,7 +519,7 @@ def test_hip_encoder_gqa_matches_sdpa(rows, valid_kv_rows, query_heads):
 
 
 def test_encoder_backend_routes_native_compact_and_padded(monkeypatch):
-    torch, kernels = _require_gfx11_wmma()
+    torch, kernels = _require_rdna35_hip()
     import torch.nn.functional as F
     from flash_rt.amd.hardware.rdna35 import Rdna35AttentionBackend
 
@@ -626,6 +614,43 @@ def test_encoder_backend_keeps_dense_extended_shape_on_sdpa(monkeypatch):
     assert output.shape == (rows, 2048)
 
 
+@pytest.mark.parametrize(
+    ("rows", "valid_prefix", "expected"),
+    [(661, 661, "sdpa"), (712, 661, "native")],
+)
+def test_gfx12_encoder_keeps_dense_prefix_on_sdpa(
+    monkeypatch, rows, valid_prefix, expected,
+):
+    torch, _kernels = _require_rdna35_hip()
+    import torch.nn.functional as F
+    from flash_rt.amd.hardware.rdna35 import Rdna35AttentionBackend
+
+    launched = []
+
+    class Gfx12Kernels:
+        @staticmethod
+        def build_info():
+            return {"gpu_arch": "gfx1201"}
+
+        @staticmethod
+        def attention_encoder_gqa_rdna(*_args):
+            launched.append("native")
+
+    def fake_sdpa(query, _key, _value, **_kwargs):
+        launched.append("sdpa")
+        return torch.zeros_like(query)
+
+    monkeypatch.setenv("FLASHRT_RDNA35_HIP_ENCODER_ATTN", "1")
+    monkeypatch.setattr(F, "scaled_dot_product_attention", fake_sdpa)
+    query = torch.zeros(rows, 8, 256, device="cuda", dtype=torch.bfloat16)
+    key = torch.zeros(rows, 1, 256, device="cuda", dtype=torch.bfloat16)
+
+    Rdna35AttentionBackend(Gfx12Kernels()).gqa(
+        query, key, torch.zeros_like(key),
+        valid_prefix=valid_prefix, prefix_capacity=rows)
+    assert launched == [expected]
+
+
 @pytest.mark.parametrize("keys_per_iteration", [1, 2, 4, 8])
 def test_hip_decoder_gqa_splitkey_variants(keys_per_iteration):
     torch, kernels = _require_rdna35_hip()
@@ -668,7 +693,7 @@ def test_hip_decoder_gqa_splitkey_variants(keys_per_iteration):
     ],
 )
 def test_hip_smallm_wmma_matches_torch(rows, inner, columns, with_bias):
-    torch, kernels = _require_gfx11_wmma()
+    torch, kernels = _require_rdna35_hip()
 
     generator = torch.Generator(device="cuda").manual_seed(
         rows + inner + columns)
@@ -695,7 +720,7 @@ def test_hip_smallm_wmma_matches_torch(rows, inner, columns, with_bias):
 
 
 def test_hip_attention_and_smallm_support_graph_replay():
-    torch, kernels = _require_gfx11_wmma()
+    torch, kernels = _require_rdna35_hip()
     import torch.nn.functional as F
 
     generator = torch.Generator(device="cuda").manual_seed(211)
@@ -753,7 +778,7 @@ def test_hip_attention_and_smallm_support_graph_replay():
 
 
 def test_hip_encoder_attention_supports_graph_replay():
-    torch, kernels = _require_gfx11_wmma()
+    torch, kernels = _require_rdna35_hip()
     import torch.nn.functional as F
 
     generator = torch.Generator(device="cuda").manual_seed(217)
@@ -821,7 +846,7 @@ def test_hipblaslt_runner_supports_graph_replay():
 
 @pytest.mark.parametrize("rows", [15, 48])
 def test_gemm_backend_routes_prepared_action_projection(monkeypatch, rows):
-    torch, kernels = _require_gfx11_wmma()
+    torch, kernels = _require_rdna35_hip()
     from flash_rt.amd.hardware.rdna35 import Rdna35GemmBackend
 
     monkeypatch.setenv("FLASHRT_RDNA35_HIP_SMALLM", "1")
@@ -843,6 +868,40 @@ def test_gemm_backend_routes_prepared_action_projection(monkeypatch, rows):
 
     torch.testing.assert_close(
         output, torch.addmm(bias, x, weight), atol=7e-2, rtol=3e-2)
+
+
+def test_prepared_smallm_matches_fresh_views_of_stacked_weights(monkeypatch):
+    torch, kernels = _require_rdna35_hip()
+    from flash_rt.amd.hardware.rdna35 import Rdna35GemmBackend
+
+    monkeypatch.setenv("FLASHRT_RDNA35_HIP_SMALLM", "1")
+    generator = torch.Generator(device="cuda").manual_seed(229)
+    stacked = torch.randn(
+        3, 1024, 2560, generator=generator, device="cuda",
+        dtype=torch.bfloat16) * 0.03
+    x = torch.randn(
+        10, 1024, generator=generator, device="cuda", dtype=torch.bfloat16)
+    backend = Rdna35GemmBackend(kernels.fvk)
+    for layer in stacked:
+        backend.prepare_smallm_weight(layer)
+
+    launched = []
+    native = backend._smallm_gemm
+
+    def record(*args, **kwargs):
+        launched.append(True)
+        return native(*args, **kwargs)
+
+    monkeypatch.setattr(backend, "_smallm_gemm", record)
+    output = torch.empty(10, 2560, device="cuda", dtype=torch.bfloat16)
+    backend.linear(output, x, stacked[1])
+    assert launched == [True]
+    torch.testing.assert_close(
+        output, x @ stacked[1], atol=7e-2, rtol=3e-2)
+
+    launched.clear()
+    backend.linear(output, x, stacked[1].clone())
+    assert launched == []
 
 
 def test_prepared_smallm_rejects_invalid_bias_before_raw_launch(monkeypatch):
@@ -894,7 +953,7 @@ def test_native_attention_rejects_invalid_output_shape():
 
 @pytest.mark.parametrize("rows", [15, 48])
 def test_gemm_backend_fuses_prepared_action_residual(monkeypatch, rows):
-    torch, kernels = _require_gfx11_wmma()
+    torch, kernels = _require_rdna35_hip()
     from flash_rt.amd.hardware.rdna35 import Rdna35GemmBackend
 
     monkeypatch.setenv("FLASHRT_RDNA35_HIP_SMALLM", "1")

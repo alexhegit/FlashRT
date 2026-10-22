@@ -18,7 +18,8 @@ The native HIP extension has architecture-selected source sets for gfx942
 8060S), and gfx1201 (RDNA 4 / Radeon AI PRO R9700). RDNA implementations
 remain in the existing `csrc/amd` layout and use an `_rdna` filename
 suffix; they do not compile or reuse the CDNA wave64/MFMA kernels.
-gfx1201 reuses the same wave32 BF16 RDNA source set as gfx1151.
+gfx1201 reuses the same wave32 BF16 RDNA source set as gfx1151; the
+`FLASHRT_AMD_RDNA4` build definition selects the gfx12 WMMA fragment layout.
 
 The extension is built for exactly one architecture. CDNA3 uses E4M3 FNUZ
 (maximum finite value 240), CDNA4 uses OCP E4M3 (maximum finite value 448),
@@ -69,7 +70,7 @@ Dependencies:
   measurements before HIP Graph capture.
 - **No vendored third-party code.** There is no CUTLASS/CK checkout to
   manage; everything else is HIP C++ plus compiler MFMA intrinsics on CDNA4
-  or WMMA builtins on RDNA 3.5.
+  or WMMA builtins on RDNA 3.5 and RDNA 4.
 - **aiter** (strongly recommended for CDNA4) — AMD's assembly flash-attention
   library. When importable it serves the attention sites; otherwise the
   backend falls back to torch SDPA. Attention is the largest kernel
@@ -182,7 +183,7 @@ python -m pytest tests/test_amd_routing.py tests/test_amd_extension.py \
 | `test_amd_kernel_parity.py` | numerical parity of the kernel surface against torch references on real-distribution inputs, including FP8 byte-exactness and the seqused fixed-shape attention path | no ROCm device or extension |
 | `test_amd_pi05_model.py` | end-to-end model load, graph capture, pinned-noise determinism, exact/fixed prompt modes, FP8 and BF16 | no checkpoint (see the per-model guide for the environment variables) |
 | `test_amd_rdna35_routing.py` | gfx1151 and gfx1201 routing, lazy imports, BF16/profile contracts, and CDNA/Triton isolation | torch unavailable; hardware-only cases require gfx1151 or gfx1201 |
-| `test_amd_rdna35_ops.py` | RDNA native-kernel parity, validation, graph replay, and library fallbacks | no gfx1151 or gfx1201 ROCm device or RDNA extension; gfx11 WMMA tests skip on gfx1201 |
+| `test_amd_rdna35_ops.py` | RDNA native-kernel parity, validation, graph replay, and library fallbacks | no gfx1151 or gfx1201 ROCm device or RDNA extension |
 | `test_amd_rdna35_model.py` | RDNA Pi0.5 finite output, determinism, full-graph parity, optimized/fallback parity, and shipped LIBERO frames | no gfx1151 or gfx1201 checkpoint |
 | `test_amd_groot_routing.py` | GROOT N1.7 pipeline-map entry, precision-tier contracts, attention-backend site/layer validation | extension-dependent cases skip without the `.so` |
 | `test_amd_groot_model.py` | GROOT N1.7 end-to-end: kernel backbone, finite actions, pinned-noise determinism, optional reference cosine | no checkpoint |

@@ -69,9 +69,9 @@ find_package(pybind11 CONFIG REQUIRED)
 # ── Architecture-selected kernel module ──
 # Keep the source files in the existing directories. RDNA variants carry an
 # `_rdna` filename suffix; wave32 RDNA targets must never compile the
-# wave64/MFMA CDNA files. gfx1201 (RDNA 4 / R9700) reuses the non-WMMA
-# BF16 wave32 sources; gfx11 WMMA kernels are stubbed until a gfx12
-# fragment-layout port lands. Runtime still requires a matching build.
+# wave64/MFMA CDNA files. gfx1201 (RDNA 4 / R9700) shares the gfx1151 BF16
+# wave32 sources; FLASHRT_AMD_RDNA4 selects the gfx12 WMMA fragment layout.
+# Runtime still requires a matching build.
 if(GPU_ARCH_BASE STREQUAL "gfx1151" OR GPU_ARCH_BASE STREQUAL "gfx1201")
   set(FLASHRT_AMD_SOURCES
     bindings_rdna.cpp
@@ -80,17 +80,10 @@ if(GPU_ARCH_BASE STREQUAL "gfx1151" OR GPU_ARCH_BASE STREQUAL "gfx1201")
     kernels/elementwise_rdna.hip
     kernels/rope_rdna.hip
     attention/decoder_flash_rdna.hip
+    attention/encoder_flash_rdna.hip
     gemm/hipblaslt_runner_rdna.hip
+    gemm/smallm_wmma_rdna.hip
   )
-  if(GPU_ARCH_BASE STREQUAL "gfx1201")
-    list(APPEND FLASHRT_AMD_SOURCES
-      attention/encoder_flash_rdna_stub.cpp
-      gemm/smallm_wmma_rdna_stub.cpp)
-  else()
-    list(APPEND FLASHRT_AMD_SOURCES
-      attention/encoder_flash_rdna.hip
-      gemm/smallm_wmma_rdna.hip)
-  endif()
 else()
   set(FLASHRT_AMD_SOURCES
     bindings.cpp
@@ -131,6 +124,9 @@ if(GPU_ARCH_BASE STREQUAL "gfx942")
 elseif(GPU_ARCH_BASE STREQUAL "gfx950")
   target_compile_definitions(flash_rt_amd_kernels PRIVATE
     FLASHRT_AMD_CDNA4=1)
+elseif(GPU_ARCH_BASE STREQUAL "gfx1201")
+  target_compile_definitions(flash_rt_amd_kernels PRIVATE
+    FLASHRT_AMD_RDNA4=1)
 endif()
 target_compile_options(flash_rt_amd_kernels PRIVATE
   $<$<COMPILE_LANGUAGE:HIP>:-O3 -ffp-contract=fast>)
