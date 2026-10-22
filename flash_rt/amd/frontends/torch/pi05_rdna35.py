@@ -44,6 +44,15 @@ _RDNA_HARDWARE_ARCH = {
 }
 
 
+def _public_rdna_hardware(expected_arch: str) -> str:
+    """Return the public hardware key for an ISA this frontend already accepted."""
+    for key, arch in _RDNA_HARDWARE_ARCH.items():
+        if arch == expected_arch:
+            return key
+    raise RuntimeError(
+        f"no public RDNA hardware key for architecture {expected_arch!r}")
+
+
 def _build_time_embeddings(num_steps: int) -> torch.Tensor:
     """Build the Pi0.5 flow-matching time schedule for ``num_steps``.
 
@@ -170,7 +179,7 @@ class Pi05TorchFrontendAmdRdna35:
         if not isinstance(chunk_size, int) or isinstance(chunk_size, bool) or chunk_size < 1:
             raise ValueError(f"chunk_size must be positive, got {chunk_size}")
 
-        self.hardware = "amd_rdna35"
+        self.hardware = _public_rdna_hardware(expected_arch)
         self.num_views = int(num_views)
         self.num_steps = int(num_steps)
         self.max_prompt_len = int(max_prompt_len)

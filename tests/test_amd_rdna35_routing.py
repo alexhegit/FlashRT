@@ -86,6 +86,16 @@ def test_rdna35_does_not_alias_cdna4(monkeypatch):
     assert detect_arch() != "amd_cdna4"
 
 
+@pytest.mark.parametrize(
+    ("arch", "hardware"),
+    [("gfx1151", "amd_rdna35"), ("gfx1201", "amd_rdna4")],
+)
+def test_shared_rdna_frontend_records_the_loaded_isa(arch, hardware):
+    from flash_rt.amd.frontends.torch.pi05_rdna35 import _public_rdna_hardware
+
+    assert _public_rdna_hardware(arch) == hardware
+
+
 def test_rdna4_pipeline_registration_is_lazy():
     from flash_rt.hardware import _PIPELINE_MAP, resolve_pipeline_class
 
